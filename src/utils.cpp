@@ -39,6 +39,17 @@ using tensorflow::Status;
 using tensorflow::string;
 using tensorflow::int32;
 
+
+bool isElementInVector(vector<int> &v, const int &element) {
+	vector<int>::iterator it;
+	it=find(v.begin(),v.end(),element);
+	if (it!=v.end()) {
+		return true;
+	}
+	else {
+		return false;
+	}
+}
 /** Read a model graph definition (xxx.pb) from disk, and creates a session object you can use to run it.
  */
 Status loadGraph(const string &graph_file_name,
@@ -69,7 +80,67 @@ Status readTensorFromMat(const Mat &mat, Tensor &outTensor) {
     return Status::OK();
 }
 
-/** Draw bounding box and add caption to the image.
+
+Tensor houghCirclesDetection(const Mat &image, float customRadius, float minValue, float imageWidth, float imageHeight) {
+    Tensor houghBoxesTensor;
+    tensorflow::TensorShape boxShape = tensorflow::TensorShape();
+    std::vector<Vec3f> circles;
+    Mat preImage;
+
+    equalizeHist(image, preImage);
+    GaussianBlur(preImage, preImage, {5, 5}, 0);
+    Laplacian(preImage, preImage, -1, 5);
+    medianBlur(preImage, preImage, 5);
+    HoughCircles(preImage, circles, HOUGH_GRADIENT, 1, 55, 100, 35, 10, 30);
+
+    int circleSize = int(circles.size());
+    boxShape.AddDim(circleSize);
+    boxShape.AddDim(4);
+    houghBoxesTensor = Tensor(tensorflow::DT_FLOAT, boxShape);
+    tensorflow::TTypes<float, 2>::Tensor houghBoxes = houghBoxesTensor.tensor<float, 2>();
+    //vector<vector<float>> houghBoxes;
+    for (int i=0; i<circleSize; i++)
+    {
+        houghBoxes(i, 0) = max(minValue, circles[i][0]-customRadius)/imageWidth;
+        houghBoxes(i, 1) = max(minValue, circles[i][1]-customRadius)/imageHeight;
+        houghBoxes(i, 2) = min(imageWidth, circles[i][0]+customRadius)/imageWidth;
+        houghBoxes(i, 3) = min(imageHeight, circles[i][1]+customRadius)/imageHeight;
+    }
+    return houghBoxesTensor;
+}
+
+std::vector<int> getAbnormalIdx(const tensorflow::TTypes<float, 2>::Tensor &boxes, 
+                                const tensorflow::TTypes<int, 2>::Tensor &indices) {
+    vector<int> abnormalIdx;
+    float centerL, centerU, centerR, centerD;
+    float idxL = indices(0,0);
+    float idxU = indices(0,1);
+    float idxR = indices(3,0);
+    float idxD = indices(3,1);
+    centerL = (boxes(idxL, 2)-boxes(idxL, 0))/2 + boxes(idxL, 0);
+    centerU = (boxes(idxU, 3)-boxes(idxU, 1))/2 + boxes(idxU, 1);
+    centerR = (boxes(idxR, 2)-boxes(idxR, 0))/2 + boxes(idxR, 0);
+    centerD = (boxes(idxD, 3)-boxes(idxD, 1))/2 + boxes(idxD, 1);
+
+    if (centerL<boxes(indices(1,0), 0)) {
+        if (not isElementInVector(abnormalIdx, idxL))
+            abnormalIdx.push_back(idxL);
+    }
+    if (centerU<boxes(indices(1,1), 1)) {
+        if (not isElementInVector(abnormalIdx, idxU))
+            abnormalIdx.push_back(idxU);
+    }
+    if (centerR>boxes(indices(2,0), 2)) {
+        if (not isElementInVector(abnormalIdx, idxR))
+            abnormalIdx.push_back(idxR);
+    }
+    if (centerD>boxes(indices(2,1), 3)) {
+        if (not isElementInVector(abnormalIdx, idxD))
+            abnormalIdx.push_back(idxD);
+    }
+    return abnormalIdx;
+}
+/** Draw bounding box and add scoreString to the image.
  *  Boolean flag _scaled_ shows if the passed coordinates are in relative units (true by default in tensorflow detection)
  */
 void drawBoundingBoxOnImage(Mat &image, double yMin, double xMin, double yMax, double xMax, double score, bool scaled=true) {
@@ -86,25 +157,25 @@ void drawBoundingBoxOnImage(Mat &image, double yMin, double xMin, double yMax, d
     // Ceiling the score down to 3 decimals (weird!)
     float scoreRounded = floorf(score * 1000) / 1000;
     string scoreString = to_string(scoreRounded).substr(0, 5);
-    string caption = "cap (" + scoreString + ")";
 
-    // Adding caption of type "LABEL (X.XXX)" to the top-left corner of the bounding box
     int fontCoeff = 12;
-    cv::Point brRect = cv::Point(tl.x + caption.length() * fontCoeff / 1.6, tl.y + fontCoeff);
+    cv::Point brRect = cv::Point(tl.x + scoreString.length() * fontCoeff / 1.6, tl.y + fontCoeff);
     cv::rectangle(image, tl, brRect, cv::Scalar(0, 255, 255), -1);
     cv::Point textCorner = cv::Point(tl.x, tl.y + fontCoeff * 0.9);
-    cv::putText(image, caption, textCorner, FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 0, 0));
+    cv::putText(image, scoreString, textCorner, FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 0, 0));
 }
 
 /** Draw bounding boxes and add captions to the image.
  *  Box is drawn only if corresponding score is higher than the _threshold_.
  */
 void drawBoundingBoxesOnImage(Mat &image,
-                              tensorflow::TTypes<float>::Flat &scores,
-                              tensorflow::TTypes<float,2>::Tensor &boxes) {
+                              const tensorflow::TTypes<float>::Flat &scores,
+                              const tensorflow::TTypes<float,2>::Tensor &boxes,
+                              std::vector<int> &abnormalIdx) {
     for (int j = 0; j < scores.size(); j++)
-        drawBoundingBoxOnImage(image,
-                               boxes(j,0), boxes(j,1),
-                               boxes(j,2), boxes(j,3),
-                               scores(j));
+        if (not isElementInVector(abnormalIdx, j))
+            drawBoundingBoxOnImage(image,
+                                boxes(j,1), boxes(j,0),
+                                boxes(j,3), boxes(j,2),
+                                scores(j));
 }
