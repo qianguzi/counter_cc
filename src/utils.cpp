@@ -81,7 +81,7 @@ Status readTensorFromMat(const Mat &mat, Tensor &outTensor) {
 }
 
 
-Tensor houghCirclesDetection(const Mat &image, float customRadius, float minValue, float imageWidth, float imageHeight) {
+Tensor houghCirclesDetection(const Mat &image, float customWidth, float customHeight, float minValue, float imageWidth, float imageHeight) {
     Tensor houghBoxesTensor;
     tensorflow::TensorShape boxShape = tensorflow::TensorShape();
     std::vector<Vec3f> circles;
@@ -91,7 +91,7 @@ Tensor houghCirclesDetection(const Mat &image, float customRadius, float minValu
     GaussianBlur(preImage, preImage, {5, 5}, 0);
     Laplacian(preImage, preImage, -1, 5);
     medianBlur(preImage, preImage, 5);
-    HoughCircles(preImage, circles, HOUGH_GRADIENT, 1, 55, 100, 35, 10, 30);
+    HoughCircles(preImage, circles, HOUGH_GRADIENT, 1, 55, 100, 35, 10, 28);
 
     int circleSize = int(circles.size());
     boxShape.AddDim(circleSize);
@@ -101,15 +101,18 @@ Tensor houghCirclesDetection(const Mat &image, float customRadius, float minValu
     //vector<vector<float>> houghBoxes;
     for (int i=0; i<circleSize; i++)
     {
-        houghBoxes(i, 0) = max(minValue, circles[i][0]-customRadius)/imageWidth;
-        houghBoxes(i, 1) = max(minValue, circles[i][1]-customRadius)/imageHeight;
-        houghBoxes(i, 2) = min(imageWidth, circles[i][0]+customRadius)/imageWidth;
-        houghBoxes(i, 3) = min(imageHeight, circles[i][1]+customRadius)/imageHeight;
+        houghBoxes(i, 0) = max(minValue, circles[i][0]-customWidth)/imageWidth;
+        houghBoxes(i, 1) = max(minValue, circles[i][1]-customHeight)/imageHeight;
+        houghBoxes(i, 2) = min(imageWidth, circles[i][0]+customWidth)/imageWidth;
+        houghBoxes(i, 3) = min(imageHeight, circles[i][1]+customHeight)/imageHeight;
     }
     return houghBoxesTensor;
 }
 
 std::vector<int> getAbnormalIdx(const tensorflow::TTypes<float, 2>::Tensor &boxes, 
+                                const tensorflow::TTypes<float>::Flat &scores,
+                                const tensorflow::TTypes<float, 2>::Tensor &inter,
+                                const tensorflow::TTypes<int>::Flat &interIdx,
                                 const tensorflow::TTypes<int, 2>::Tensor &indices) {
     vector<int> abnormalIdx;
     float centerL, centerU, centerR, centerD;
@@ -117,6 +120,18 @@ std::vector<int> getAbnormalIdx(const tensorflow::TTypes<float, 2>::Tensor &boxe
     float idxU = indices(0,1);
     float idxR = indices(3,0);
     float idxD = indices(3,1);
+    int oriNumBoxes = scores.size();
+
+    if (interIdx.size() > 0){
+        for (int i = 0; i < interIdx.size(); i++){
+            for (int j = 0; j < oriNumBoxes; j++){
+                if ((inter(interIdx(i), j) == 1) && ((scores(j) - scores(interIdx(i))) > 0.1)){
+                    abnormalIdx.push_back(interIdx(i));
+                    break;
+                }
+            }
+        }
+    }
     centerL = (boxes(idxL, 2)-boxes(idxL, 0))/2 + boxes(idxL, 0);
     centerU = (boxes(idxU, 3)-boxes(idxU, 1))/2 + boxes(idxU, 1);
     centerR = (boxes(idxR, 2)-boxes(idxR, 0))/2 + boxes(idxR, 0);

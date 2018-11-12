@@ -44,7 +44,9 @@ int main(int argc, char *argv[])
     string inputBoxesNode = "input_boxes:0";
     vector<string> outputLayer = {"Non_max_suppression/result_boxes:0", \
                                 "Non_max_suppression/result_scores:0", \
-                                "Non_max_suppression/abnormal_indices"};
+                                "Non_max_suppression/abnormal_indices", \
+                                "Non_max_suppression/abnormal_inter_idx:0", \
+                                "Non_max_suppression/abnormal_inter:0"};
 
     // Load and initialize the model from .pb file
     std::unique_ptr<tensorflow::Session> session;
@@ -63,11 +65,12 @@ int main(int argc, char *argv[])
         LOG(INFO) << "loadGraph(): frozen graph loaded" << endl;
 
     struct timeval start, end;
-    Mat oriImage, inputImage, colorImage;
+    Mat oriImage, resizeImage, inputImage, colorImage;
     Tensor inputImageTensor, inputGridTensor;
     std::vector<Tensor> outputTensors;
     tensorflow::TensorShape imgShape = tensorflow::TensorShape();
     tensorflow::TensorShape gridSizeShape = tensorflow::TensorShape();
+    bool addHough = true;
 
     imgShape.AddDim(1);
     imgShape.AddDim(800);
@@ -86,11 +89,10 @@ int main(int argc, char *argv[])
     {
         gettimeofday(&start, NULL);
         oriImage = imread(imageDir + s + "_resize.jpg", 0);
-        cvtColor(oriImage, colorImage, COLOR_GRAY2RGB);
+        resize(oriImage, resizeImage, Size(600,800));
+        cvtColor(resizeImage, colorImage, COLOR_GRAY2RGB);
         colorImage.convertTo(inputImage, CV_32FC3);
         inputImage = inputImage / 127.5 - 1;
-        
-        Tensor inputBoxesTensor = houghCirclesDetection(oriImage);
 
         // Convert mat to tensor
         Status readTensorStatus = readTensorFromMat(inputImage, inputImageTensor);
@@ -102,10 +104,20 @@ int main(int argc, char *argv[])
 
         // Run the graph on tensor
         outputTensors.clear();
-        Status runStatus = session->Run({{inputImageNode, inputImageTensor}, \
+        Status runStatus;
+        if (addHough) {
+            Tensor inputBoxesTensor = houghCirclesDetection(oriImage);
+            runStatus = session->Run({{inputImageNode, inputImageTensor}, \
                                         {inputGridNode, inputGridTensor}, \
                                         {inputBoxesNode, inputBoxesTensor}}, \
                                         outputLayer, {}, &outputTensors);
+        }
+        else {
+            runStatus = session->Run({{inputImageNode, inputImageTensor}, \
+                                        {inputGridNode, inputGridTensor}}, \
+                                        outputLayer, {}, &outputTensors);
+        }
+
         if (!runStatus.ok())
         {
             LOG(ERROR) << "Running model failed: " << runStatus;
@@ -116,11 +128,15 @@ int main(int argc, char *argv[])
         tensorflow::TTypes<float, 2>::Tensor resultBoxes = outputTensors[0].tensor<float, 2>();
         tensorflow::TTypes<float>::Flat resultScores = outputTensors[1].flat<float>();
         tensorflow::TTypes<int, 2>::Tensor abnormalIndices = outputTensors[2].tensor<int, 2>();
+        tensorflow::TTypes<int>::Flat abnormalInterIdx = outputTensors[3].flat<int>();
+        tensorflow::TTypes<float, 2>::Tensor abnormalInter = outputTensors[4].tensor<float, 2>();
 
-        vector<int> abnormalIdx = getAbnormalIdx(resultBoxes, abnormalIndices);
-        
+        vector<int> abnormalIdx = getAbnormalIdx(resultBoxes, resultScores, abnormalInter, abnormalInterIdx, abnormalIndices);
+        int numBoxes = resultScores.size() - abnormalIdx.size();
+        cout << s << ": " << numBoxes << endl;
         gettimeofday(&end, NULL);
-        cout << 1000000 * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec << endl;
+        cout << "Time cost: " << (end.tv_sec - start.tv_sec) + \
+            (end.tv_usec - start.tv_usec)/1000000.0 << "s" << endl;
 
         drawBoundingBoxesOnImage(colorImage, resultScores, resultBoxes, abnormalIdx);
 

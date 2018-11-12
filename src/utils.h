@@ -21,9 +21,13 @@ Status loadGraph(const string &graph_file_name,
 
 Status readTensorFromMat(const cv::Mat &mat, Tensor &outTensor);
 
-Tensor houghCirclesDetection(const cv::Mat &image, float customRadius=28, float minValue=0, float imageWidth=600, float imageHeight=800);
+Tensor houghCirclesDetection(const cv::Mat &image, float customWidth=30, float customHeight=30, 
+                            float minValue=0, float imageWidth=600, float imageHeight=800);
 
-std::vector<int> getAbnormalIdx(const tensorflow::TTypes<float, 2>::Tensor &boxes, 
+std::vector<int> getAbnormalIdx(const tensorflow::TTypes<float, 2>::Tensor &boxes,
+                                const tensorflow::TTypes<float>::Flat &scores,
+                                const tensorflow::TTypes<float, 2>::Tensor &inter,
+                                const tensorflow::TTypes<int>::Flat &interIdx,
                                 const tensorflow::TTypes<int, 2>::Tensor &indices);
 
 void drawBoundingBoxOnImage(cv::Mat &image, double xMin, double yMin, double xMax, double yMax, double score, bool scaled);
